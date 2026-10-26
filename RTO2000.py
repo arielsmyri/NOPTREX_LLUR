@@ -52,17 +52,18 @@ print(f'Visa manufacturer: {instr.visa_manufacturer}')
 print(f'Instrument full name: {instr.full_instrument_model_name}')
 print(f'Instrument installed options: {",".join(instr.instrument_options)}')
 
+channel = 1
 
 instr.write_str('ACQuire:POINts:AUTO RECLength')   # keep record length fixed (verify enum name for your firmware)
 instr.write_str('ACQuire:POINts 5000')
 
-instr.write_str('CHANnel1:SCALe 0.1')              # V/div
-instr.write_str('CHANnel1:OFFSet 0')               # V
+instr.write_str('CHANnel{channel}:SCALe 200E-3')              # V/div
+instr.write_str('CHANnel{channel}:OFFSet -389E-3')               # V
 instr.write_str('TIMebase:SCALe 5E-9')             # s/div (or TIMebase:RANGe)
 instr.write_str('TIMebase:REFerence 50')           # % of screen
-instr.write_str('TIMebase:HORizontal:POSition 0')  # s
-
-
+instr.write_str('TIMebase:HORizontal:POSition -8.71E-9')
+instr.write_str('CHANnel{channel}:IMPedance 50')  # s
+instr.write_str('CHANnel{channel}:COUpling DC')
 
 instr.visa_timeout = 3000
 instr.write_with_opc("INIT")
@@ -74,14 +75,28 @@ def measure():
     return waveform
 
 #writing waveform to file if so desired
+path = os.abspath()
+
 def writeWaveform():
     instr.data_chunk_size = 10000
     instr.query_bin_block_to_file(
         'FORM REAL,32;:CHAN1:DATA?',
-        r'c:\temp\rto_waveform_data.bin', #FIX THIS OR DIE -- USE OS PATH METHOD
+        path,
         append=False)
 
-def analysis(waveform):
+def analysis(waveform): # Function designed to run full analysis on the waveform
+    #FWHM
+    peak = np.argmax(waveform)
+
+    rightBound = peak
+    leftBound = peak
+    while rightBound < len(waveform) - 1 and waveform[rightBound] > waveform[rightBound + 1]:
+        rightBound += 1
+    while leftBound > 0 and waveform[leftBound] > waveform[leftBound - 1]:
+        leftBound -= 1
+
+    baseline = np.median(waveform)  # see note below
+
     peak = np.argmax(waveform)
     rightBound = peak
     leftBound = peak
@@ -90,20 +105,30 @@ def analysis(waveform):
     while leftBound > 0 and waveform[leftBound] > waveform[leftBound - 1]:
         leftBound -= 1
 
-    baseline = np.median(waveform)          # see note below
+    baseline = np.median(waveform)
 
     midpoint = baseline + 0.5 * (waveform[peak] - baseline)
+    ninety = baseline + 0.9 * (waveform[peak] - baseline)
+    ten = baseline + 0.1 * (waveform[peak] - baseline)
+
+    ninetyLoc = 0
+    midLoc = 0
+
     leftVal = peak
     rightVal = peak
 
-    while rightVal < len(waveform) - 1 and waveform[rightVal] > midpoint:
-        rightVal += 1
-    while leftVal > 0 and waveform[leftVal] > midpoint:
+    while waveform[leftVal] >= ten:
+        if waveform[leftVal] > ninety:
+            ninetyLoc = leftVal
+        if waveform[leftVal] >= midpoint:
+            midLoc = leftVal
         leftVal -= 1
+    while waveform[rightVal] >= ten:
+        rightVal += 1
 
-    print(f"FWHM is {(rightVal - leftVal) / 100} nanoseconds")
+    print(f"FWHM is {(rightVal - midLoc) / 100} nanoseconds")
+    print(f"Rise time is {(ninetyLoc - leftVal) / 100} nanoseconds")
 
 instr.close() #Session Close
-
 
 analysis(measure())
